@@ -47,12 +47,14 @@ For more visual results, go checkout our <a href="https://zjx0101.github.io/proj
 **Thank you all for your interest in our dataset!** As the work is currently under review, we will not be releasing the datasets at this stage. We plan to make it publicly available once the paper is accepted. Please stay tuned for further updates! 🙂
 
 ## ⭐ Update
+- [2025.09] We have released our [benchmark datasets](https://drive.google.com/drive/folders/12LA53ZPAG1uxdVXsn90L2qe6zCcp6aGF?usp=sharing) for evaluation, along with [our results](https://drive.google.com/drive/folders/1eUbIz5OS9yK6Ih8Y1qXoXuk_UWOcifcY?usp=sharing) to facilitate comparison.
 - [2025.07] Release the inference code and Gradio demo.
 - [2025.05] This repo is created.
 
 ### ✅ TODO
-- [ ] Release our datasets
+- [ ] Release our training datasets
 - [ ] Adapt to ComfyUI
+- [x] Release our benchmark datasets
 - [x] ~~Release the inference code and Gradio demo~~
 
 
@@ -105,11 +107,15 @@ Run the following command to try it out:
 
 ```shell
 ## Single image inference
-python inference_objectclear.py -i inputs/imgs/test-sample1.jpg -m inputs/masks/test-sample1.png --use_fp16
+python inference_objectclear.py -i inputs/imgs/test-sample1.jpg -m inputs/masks/test-sample1.png --guidance_scale 2.5 --use_fp16
 
 ## Batch inference on image folder
-python inference_objectclear.py -i inputs/imgs -m inputs/masks --use_fp16
+python inference_objectclear.py -i inputs/imgs -m inputs/masks --guidance_scale 2.5 --use_fp16
 ```
+
+> **Note:** `--guidance_scale` controls the trade-off: higher values lead to stronger removal, while lower values better preserve background details.  
+> The default setting is `--guidance_scale 2.5`. For all [benchmark results](https://drive.google.com/drive/folders/1eUbIz5OS9yK6Ih8Y1qXoXuk_UWOcifcY?usp=sharing) reported in our paper, we used `--guidance_scale 1.0`.
+
 
 
 ## 🪄 Interactive Demo

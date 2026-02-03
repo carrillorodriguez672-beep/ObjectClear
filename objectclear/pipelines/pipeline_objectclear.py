@@ -14,6 +14,7 @@
 
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+import os
 
 import numpy as np
 import PIL.Image
@@ -464,9 +465,7 @@ class ObjectClearPipeline(
         
         if self.config.apply_attention_guided_fusion:
             self.cross_attention_scores = {}
-            self.unet = self.unet_store_cross_attention_scores(
-                self.unet, self.cross_attention_scores
-            )
+            self.original_state = None
 
 
     @classmethod
@@ -487,14 +486,17 @@ class ObjectClearPipeline(
         )
 
         postfuse_module = PostfuseModule(embed_dim=2048, embed_dim_img=768)
+        sub_folder = "postfuse_module"
         filename = "model.safetensors"
-
-        safetensor_path = hf_hub_download(
-            repo_id="jixin0101/ObjectClear",      
-            filename=filename,
-            subfolder="postfuse_module",            
-            cache_dir=cache_dir                     
-        )
+        if pretrained_model_name_or_path == "jixin0101/ObjectClear":
+            safetensor_path = hf_hub_download(
+                repo_id="jixin0101/ObjectClear",      
+                filename=filename,
+                subfolder="postfuse_module",            
+                cache_dir=cache_dir                     
+            )
+        else:
+            safetensor_path = os.path.join(pretrained_model_name_or_path, sub_folder, filename)
         state_dict_postfuse = load_file(safetensor_path)
         postfuse_module.load_state_dict(state_dict_postfuse)
         
@@ -538,7 +540,7 @@ class ObjectClearPipeline(
 
             return image_embeds, uncond_image_embeds
         
-    def unet_store_cross_attention_scores(self, unet, attention_scores):
+    def unet_store_cross_attention_scores(self, unet, attention_scores, applicable_layers=None):
         from diffusers.models.attention_processor import (
             Attention,
             AttnProcessor,
@@ -546,34 +548,25 @@ class ObjectClearPipeline(
         )
         import types
 
-        UNET_LAYER_NAMES = [
-            "down_blocks.0",
-            "down_blocks.1",
-            "down_blocks.2",
-            "mid_block",
-            "up_blocks.1",
-            "up_blocks.2",
-            "up_blocks.3",
-        ]
-
-        start_layer = 0
-        end_layer = 2
-        applicable_layers = UNET_LAYER_NAMES[start_layer:end_layer]
+        TARGET_LAYER = "down_blocks.1.attentions.0.transformer_blocks.0.attn2"  
+        original_state = {} 
 
         def make_new_get_attention_scores_fn(name):
             def new_get_attention_scores(module, query, key, attention_mask=None):
                 attention_probs = module.old_get_attention_scores(
                     query, key, attention_mask
                 )
-                attention_scores[name] = attention_probs
+                if name == TARGET_LAYER:
+                    attention_scores[name] = attention_probs 
                 return attention_probs
-
             return new_get_attention_scores
 
         for name, module in unet.named_modules():
-            if isinstance(module, Attention) and "attn2" in name:
-                if not any(layer in name for layer in applicable_layers):
-                    continue
+            if isinstance(module, Attention) and name == TARGET_LAYER and "attn2" in name:
+                original_state[name] = {
+                    "processor": module.processor,
+                    "get_attention_scores": module.get_attention_scores
+                }
                 if isinstance(module.processor, AttnProcessor2_0):
                     module.set_processor(AttnProcessor())
                 module.old_get_attention_scores = module.get_attention_scores
@@ -582,6 +575,19 @@ class ObjectClearPipeline(
                 )
                 module.get_attention_scores = module.new_get_attention_scores
 
+        return unet, original_state 
+
+    def unet_restore_attention_processor(self, unet, original_state):
+        from diffusers.models.attention_processor import Attention
+
+        for name, module in unet.named_modules():
+            if isinstance(module, Attention) and "attn2" in name and name in original_state:
+                module.get_attention_scores = original_state[name]["get_attention_scores"]
+                module.set_processor(original_state[name]["processor"])
+                if hasattr(module, "old_get_attention_scores"):
+                    delattr(module, "old_get_attention_scores")
+                if hasattr(module, "new_get_attention_scores"):
+                    delattr(module, "new_get_attention_scores")
         return unet
     
     def resize_attn_map_divide2(self, attn_map, mask, fuse_index):
@@ -1872,6 +1878,12 @@ class ObjectClearPipeline(
             for i, t in enumerate(timesteps):
                 if self.interrupt:
                     continue
+                # Inject cross-attention storage logic at the last timestep
+                if i == len(timesteps) - 1 and self.config.apply_attention_guided_fusion:
+                    self.unet, self.original_state = self.unet_store_cross_attention_scores(
+                        self.unet, 
+                        self.cross_attention_scores
+                    )
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
 
@@ -1926,7 +1938,7 @@ class ObjectClearPipeline(
                         
                         latents = (1 - init_mask) * init_latents_proper + init_mask * latents
                         
-                    if i == len(timesteps) - 1:
+                    if i == len(timesteps) - 1 and self.config.apply_attention_guided_fusion:
                         attn_key, attn_map = next(iter(self.cross_attention_scores.items()))
                         attn_map = self.resize_attn_map_divide2(attn_map, mask, fuse_index)
                         init_latents_proper = image_latents
@@ -1935,7 +1947,13 @@ class ObjectClearPipeline(
                         else:
                             init_mask = attn_map
                         attn_map = init_mask
-                    self.clear_cross_attention_scores(self.cross_attention_scores)
+
+                        self.unet = self.unet_restore_attention_processor(
+                            self.unet, 
+                            self.original_state
+                        )
+
+                        self.clear_cross_attention_scores(self.cross_attention_scores)
                 
                 if num_channels_unet == 4:
                     init_latents_proper = image_latents
