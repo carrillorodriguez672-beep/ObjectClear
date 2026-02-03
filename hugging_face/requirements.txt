@@ -9,4 +9,4 @@ scipy
 diffusers
 segment-anything
 matplotlib
-gradio==5.30.0
+gradio==5.31.0
