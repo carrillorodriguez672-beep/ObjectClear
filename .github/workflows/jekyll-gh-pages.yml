@@ -19,12 +19,13 @@ permissions:
 # However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
 concurrency:
   group: "pages"
-  cancel-in-progress:
+defaults:
+  
 
 jobs:
   # Build job
   build:
-    runs-on: ubuntu-latest
+    runs-on:"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
